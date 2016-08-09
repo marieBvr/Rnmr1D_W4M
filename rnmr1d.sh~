@@ -1,0 +1,32 @@
+#!/bin/sh
+
+### Run Rnmr1d providing the R script in $1 $2 $3 $4 as input and
+### $5 as directory output
+
+# Function that writes a message to stderr and exits
+fail()
+{
+    echo "$@" >&2
+    exit 1
+}
+
+
+# Ensure R executable is found
+which R > /dev/null || fail "'R' is required by this tool but was not found on path"
+which Rnmr1D > /dev/null || fail "'Rnmr1D' is required by this tool but was not found on path" 
+
+# Extract arguments
+zip=$1;
+sample=$2;
+macrocmd=$3;
+bucket=$4;
+output=$5;
+
+# Ensure the files exist
+test -f $zip || fail "R input file '$zip' does not exist"
+test -f $sample || fail "R input file '$sample' does not exist"
+test -f $macrocmd || fail "R input file '$macrocmd' does not exist"
+test -f $bucket || fail "R input file '$bucket' does not exist"
+
+# Invoke Rnmr1D passing file to stdin
+Rnmr1D -z $zip -s $sample -p $macrocmd -b $bucket -o $output -l out.log

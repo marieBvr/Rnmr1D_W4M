@@ -1,0 +1,142 @@
+#
+# Calibration: PPM REF = 0 , Zone Ref = (  -0.013  ,  0.013  )
+#
+calibration -0.013 0.013 0
+
+#
+# Baseline Correction: PPM Range = (  -0.4995660520046  ,  11.0000011357711  )
+#
+baseline 10.2 10.5 -0.4995660520046 11.0000011357711 1 1
+
+#
+# Baseline Correction: PPM Range = (  6.781  ,  7.406  )
+#
+baseline 10.2 10.5 6.781 7.406 10 1
+
+#
+# Alignment of the selected zones ...
+#
+align
+7.758 7.809
+7.048 7.083
+6.969 7.045
+EOL
+
+#
+# Zeroing the selected zones ...
+#
+zero
+6.783 6.879
+7.081 7.174
+6.928 6.989
+EOL
+
+#
+# Alignment of the selected zones ...
+#
+align
+8.103 8.157
+EOL
+
+#
+# Baseline Correction: PPM Range = (  8.158  ,  8.42  )
+#
+baseline 10.2 10.5 8.158 8.42 10 1
+
+#
+# Baseline Correction: PPM Range = (  5.882  ,  6.178  )
+#
+baseline 10.2 10.5 5.882 6.178 10 1
+
+#
+# Zeroing the selected zones ...
+#
+zero
+4.536 5.094
+EOL
+
+#
+# Baseline Correction: PPM Range = (  2.62  ,  4.561  )
+#
+baseline 10.2 10.5 2.62 4.561 6 1
+
+#
+# Baseline Correction: PPM Range = (  1.981  ,  2.61  )
+#
+baseline 10.2 10.5 1.981 2.61 6 1
+
+#
+# Baseline Correction: PPM Range = (  1.573  ,  1.985  )
+#
+baseline 10.2 10.5 1.573 1.985 6 1
+
+#
+# Baseline Correction: PPM Range = (  1.296  ,  1.617  )
+#
+baseline 10.2 10.5 1.296 1.617 10 1
+
+#
+# Baseline Correction: PPM Range = (  1.128  ,  1.297  )
+#
+baseline 10.2 10.5 1.128 1.297 10 1
+
+#
+# Baseline Correction: PPM Range = (  0.824  ,  1.092  )
+#
+baseline 10.2 10.5 0.824 1.092 10 1
+
+#
+# Zeroing the selected zones ...
+#
+zero
+0.814 0.897
+EOL
+
+#
+# Alignment of the selected zones ...
+#
+align
+8.6 8.64
+8.573 8.6
+8.327 8.362
+EOL
+
+#
+# Baseline Correction: PPM Range = (  5.584  ,  5.663  )
+#
+baseline 10.2 10.5 5.584 5.663 10 1
+
+#
+# Alignment of the selected zones ...
+#
+align
+3.401 3.455
+3.243 3.287
+EOL
+
+#
+# Baseline Correction: PPM Range = (  3.753  ,  3.807  )
+#
+baseline 10.2 10.5 3.753 3.807 10 1
+
+#
+# Alignment of the selected zones ...
+#
+align
+3.779 3.797
+EOL
+
+#
+# Alignment of the selected zones ...
+#
+align
+3.753 3.779
+EOL
+
+#
+# Alignment of the selected zones ...
+#
+align
+3.71 3.753
+EOL
+

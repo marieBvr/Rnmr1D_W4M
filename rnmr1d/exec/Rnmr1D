@@ -1,0 +1,661 @@
+#!/usr/bin/env Rscript
+
+"Rnmr1D - Command Line Interface (CLI) of the NMR spectra processing module (R package 'Rnmr1D')
+
+Usage:
+  Rnmr1D [options]
+
+Options:
+  -h, --help           Show this screen.
+  -d, --debug          Show more information
+  -z, --zip <file>     the full path name of the ZIP file (raw.zip)
+  -s, --samples <file> the full path name of the Sample file (tabular format)
+  -p, --proccmd <file> the full path name of the Macro-commands file for processing (text format)
+  -b, --bucfile <file> the full path name of the file of bucket's zones (tabular format)
+  -c, --cpu <n>        the number of cores [default: 4]
+  -o, --outdir <path>  the full path name of the directory to output the resulting files
+  -l, --logfile <file> the full path name of the LOG file [default: stdout]
+" -> doc
+
+options(warn=-1)
+
+# dependencies
+library(docopt)
+library(doParallel)
+library(MASS)
+library(Rnmr1D)
+
+# retrieve the command-line arguments
+opts <- docopt(doc)
+
+PPM_MIN <- -0.5
+PPM_MAX <- 11
+sep <- "\t"
+
+# returns string w/o leading or trailing whitespace
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+
+Write.LOG <- function(..., logfile=stdout()) cat(sprintf(...), sep='', file=logfile, append=TRUE)
+
+# -----
+# Generate the 'samples.csv' & 'factors' files from the list of raw spectra
+# -----
+
+# Inputs: 
+#    inputDir : the directory containing the unzipped files
+#    SampleFile : the Samples file
+#    DATADIR : where data will be stored
+# Outputs under DATADIR 
+#    samples.csv : the Sample file
+#    factors : file given the list of the severals factors
+generate_Metadata_File <- function(inputDir, DATADIR, SampleFile)
+{
+   lstfac <- c("1;Samplecode")
+   LIST <- list.files(path = inputDir, pattern = "1r$", all.files = FALSE, full.names = TRUE, recursive = TRUE, ignore.case = FALSE, include.dirs = FALSE)
+   LIST <- as.data.frame(t(simplify2array(strsplit(LIST,'/'))))
+   rawcol <- dim(LIST)[2]-4
+   RAW <- as.character(unique(LIST[, rawcol]))
+   rawdir <- paste(as.matrix(LIST[1, 1:(rawcol-1)]),collapse='/')
+   LIST <- LIST[, -c(1:(rawcol-1))]
+   nbcol <- 1
+   m_samples <- NULL
+
+   OKRAW <- 1
+   ERRORLIST <- c()
+
+   repeat
+   {
+      # if a file  of samples was uploaded along with the ZIP file
+      if (file.exists(SampleFile)) {
+         samples <- read.table(SampleFile, sep="\t", header=T)
+         m_samples <- trim(as.matrix(samples))
+         samplesize <- dim(m_samples)
+         nbcol <- samplesize[2]
+         RAW <- m_samples[,1]
+         listrep <- sapply( c(1:(dim(m_samples)[1])), function(x){ paste(rawdir, m_samples[x,1], sep='/'); })
+         ERRORLIST <- gsub(rawdir, "", listrep[ ! sapply( listrep, file.exists ) ])
+         OKRAW <- ifelse (length(ERRORLIST)>0, 0, 1 )
+         if (OKRAW==0) break
+      }
+
+      # if there is no information regarding both 'expno' and 'procno',
+      # take the smallest expno and procno identifiers
+      if (! file.exists(SampleFile) || nbcol<3) {
+         L <- t(sapply( c(1:length(RAW)), function(x) {
+             V <- as.matrix(LIST[ LIST[,1]==RAW[x], ])
+             if (dim(V)[1]>1) {
+                 Vordered <- V[ order(as.numeric(V[,2]), as.numeric(V[,4])), ]
+             } else {
+                 Vordered <- V
+             }
+             c( as.numeric(Vordered[1,2]), as.numeric(Vordered[1,4]) )
+         }))
+         OKRAW <- ifelse ( length(RAW)==dim(L)[1], 1, 0 )
+         if (OKRAW==0) break
+         expno  <- L[,1]
+         procno <- L[,2]
+         M <- NULL
+         if (nbcol==1) { M <- cbind(RAW,RAW); } else { M <- cbind(as.character(RAW), m_samples[,2]); }
+         IDS <- cbind(paste(rawdir,RAW, sep='/'), expno, procno)
+         break
+      }
+
+      # if there is some information regarding 'expno' and 'procno',
+      # check if it is consistent with the raw data within the provided ZIP file
+      if (file.exists(SampleFile) && nbcol>2 ) {
+         list1r <- sapply( c(1:(dim(m_samples)[1])), function(x){ paste(rawdir, m_samples[x,1], m_samples[x,3], 'pdata', m_samples[x,4], '1r', sep='/'); })
+         ERRORLIST <- gsub(rawdir, "", list1r[ ! sapply( list1r, file.exists ) ])
+         OKRAW <- ifelse (length(ERRORLIST)>0, 0, 1 )
+         if (OKRAW==0) break
+         if (nbcol==4) {
+             M <- cbind(m_samples[,1], m_samples[,2]);
+             IDS <- cbind(paste(rawdir,as.character(RAW), sep='/'), m_samples[,3], m_samples[,4])
+             break
+         }
+         if (nbcol>4) {
+             M <- m_samples[,c(-3:-4)]
+             IDS <- cbind(paste(rawdir,as.character(RAW), sep='/'), m_samples[,3], m_samples[,4])
+             lstfac <- c( lstfac, paste(c(2:(nbcol-3)), colnames(m_samples)[c(-1:-4)], sep=";") )
+             break
+         }
+      }
+
+      break
+   }
+
+   if (OKRAW==1) {
+      write.table(M, file=file.path(DATADIR,'samples.csv'), sep=';', row.names=F, col.names=F, quote=F)
+      write.table(IDS, file=file.path(DATADIR,'rawids.csv'), sep=';', row.names=F, col.names=F, quote=F)
+      fileConn<-file(file.path(DATADIR,'factors'))
+      writeLines(lstfac, fileConn)
+      close(fileConn)
+   } else {
+      write.table(ERRORLIST, file=file.path(DATADIR,'errorlist.csv'), sep=';', row.names=F, col.names=F, quote=F)
+   }
+
+   return(OKRAW)
+}
+
+#------------------------------
+# Read the specs.pack
+#------------------------------
+get_specMat <- function(specPackFile) {
+   specMat <- readSpecMatrix(specPackFile)
+   specMat$dppm <- (specMat$ppm_max - specMat$ppm_min)/(specMat$size - 1)
+   specMat$ppm <- rev(seq(from=specMat$ppm_min, to=specMat$ppm_max, by=specMat$dppm))
+   return(specMat)
+}
+
+#------------------------------
+# Calibration ot the PPM Scale
+#------------------------------
+RCalib1D <- function(specMat, zoneref, ppmref)
+{
+   i1<-length(which(specMat$ppm>max(zoneref)))
+   i2<-which(specMat$ppm<=min(zoneref))[1]
+
+   # PPM calibration of each spectrum
+   for ( i in 1:specMat$nspec ) {
+       i0 <- i1 + which(specMat$int[i, i1:i2]==max(specMat$int[i, i1:i2])) - 1
+       ppm0 <- specMat$ppm_max - (i0-1)*specMat$dppm
+       dppmref <- ppm0 - ppmref
+       decal <- 0
+       if (abs(dppmref) > specMat$dppm) {
+           decal <- trunc(dppmref/specMat$dppm)
+           dppmref <- dppmref - decal*specMat$dppm
+       }
+       if (abs(dppmref) > 0.5*specMat$dppm) {
+           decal <- decal + trunc(2*dppmref/specMat$dppm)
+           dppmref <- dppmref - trunc(2*dppmref/specMat$dppm)*specMat$dppm
+       }
+       if (decal==0) next
+
+       if (decal<0) {
+          specMat$int[i, 1:(specMat$size-abs(decal))] <- specMat$int[i,(1+abs(decal)):specMat$size]
+          specMat$int[i, (specMat$size-abs(decal)+1):specMat$size] <- 0
+       }
+       if (decal>0) {
+          specMat$int[i,(1+abs(decal)):specMat$size] <- specMat$int[i, 1:(specMat$size-abs(decal))]
+          specMat$int[i, 1:abs(decal)] <- 0
+       }
+   }
+   return(specMat)
+}
+
+#------------------------------
+# Baseline Correction
+#------------------------------
+RBaseline1D <- function(specMat,PPM_NOISE_AREA, zone, WINDOWSIZE)
+{
+   i1 <- ifelse( max(zone)>=specMat$ppm_max, 1, length(which(specMat$ppm>max(zone))) )
+   i2 <- ifelse( min(zone)<=specMat$ppm_min, specMat$size - 1, which(specMat$ppm<=min(zone))[1] )
+
+   SMOOTHSIZE <- round(WINDOWSIZE/2)
+   ALPHA <- 0.2
+
+   # Ajust the window size parameter
+   n <- i2-i1+1
+   ws <- WINDOWSIZE
+   dws <- 0
+   signdws <- ifelse ( n/ws>round(n/ws), 1, -1 )
+   dmin <- 1
+   repeat {
+       d <- abs(n/(ws+signdws*dws)-round(n/(ws+signdws*dws)))
+       if (d>dmin) { dws <- dws - signdws; break }
+       dmin <- d; dws <- dws + signdws;
+   }
+   WINDOWSIZE <- ws+signdws*dws
+   n2 <- round(n/(ws+signdws*dws))*(ws+signdws*dws)
+   if (n2<n) i2 <- i2 - (n-n2)
+
+   # Baseline Estimation for each spectrum
+   BLList <- foreach(i=1:specMat$nspec, .combine=cbind) %dopar% {
+       specSig <- fitdistr(specMat$int[i,length(which(specMat$ppm>PPM_NOISE_AREA[2])):(which(specMat$ppm<=PPM_NOISE_AREA[1])[1])], "normal")$estimate[2]
+       x <- specMat$int[i,c(i1:i2)]
+       xmat <- matrix(x, nrow=WINDOWSIZE)
+       ymin <- apply(xmat, 2, min) + 1.2*specSig
+       y1 <- rep(ymin, each = WINDOWSIZE)
+       y2 <- Smooth(y1,SMOOTHSIZE)
+       BL <- simplify2array(lapply(c(1:length(x)), function(k) { min(y1[k], y2[k]); }))
+       BL <- lowpass1(BL, ALPHA);
+       BL
+   }
+
+   # Baseline Correction for each spectrum
+   for ( i in 1:specMat$nspec ) {
+       specMat$int[i,c(i1:i2)] <- specMat$int[i,c(i1:i2)] - BLList[,i]
+   }
+
+   return(specMat)
+}
+
+#------------------------------
+# Zeroing the selected PPM ranges
+#------------------------------
+RZero1D <- function(specMat, zones, LOGFILE=NULL)
+{
+   # Zeroing each PPM range
+   N <- dim(zones)[1]
+   for ( i in 1:N ) {
+       i1<-length(which(specMat$ppm>max(zones[i,])))
+       i2<-which(specMat$ppm<=min(zones[i,]))[1]
+       specMat$int[,c(i1:i2)] <- matrix(0,specMat$nspec,(i2-i1+1))
+       if( !is.null(LOGFILE) ) Write.LOG(paste("Rnmr1D:  Zone",i,"= (",min(zones[i,]),",",max(zones[i,]),")\n"), logfile=LOGFILE)
+   }
+
+   return(specMat)
+}
+
+#------------------------------
+# Alignment of the selected PPM ranges
+#------------------------------
+RAlign1D <- function(specMat, zones, LOGFILE=NULL)
+{
+   # Alignment of each PPM range
+   N <- dim(zones)[1]
+   for ( i in 1:N ) {
+       i1<-length(which(specMat$ppm>max(zones[i,])))
+       i2<-which(specMat$ppm<=min(zones[i,]))[1]
+       if( !is.null(LOGFILE) ) Write.LOG(paste("Rnmr1D:  Zone",i,"= (",min(zones[i,]),",",max(zones[i,]),")\n"),logfile=LOGFILE)
+       NBPASS <- 3
+       for( n in 1:NBPASS) {
+            ret <- C_align_segment (specMat$int, C_segment_shifts (specMat$int, i1-1, i2-1, round(0.04/specMat$dppm)), i1-1, i2-1)
+       }
+   }
+
+   return(specMat)
+}
+
+# ------------------------------------
+# Process the Macro-commands file")
+# ------------------------------------
+RProcCMD1D <- function(specMat, specParamsDF, CMDTEXT, NCPU=1, LOGFILE=NULL)
+{
+   lbALIGN <- 'align'
+   lbBASELINE <- 'baseline'
+   lbBIN <- 'binning'
+   lbCALIB <- 'calibration'
+   lbZERO <- 'zero'
+   EOL <- 'EOL'
+
+   SI <- (as.list(specParamsDF[1,]))$SI
+
+   CMDTEXT <- CMDTEXT[ grep( "^[^ ]", CMDTEXT ) ]
+   CMD <- CMDTEXT[ grep( "^[^#]", CMDTEXT ) ]
+   CMD <- gsub("^ ", "", gsub(" $", "", gsub(" +", ";", CMD)))
+
+   specMat$fWriteSpec <- FALSE
+   
+   while ( length(CMD)>0 && CMD[1] != EOL ) {
+   
+      cmdLine <- CMD[1]
+      cmdPars <- unlist(strsplit(cmdLine[1],";"))
+      cmdName <- cmdPars[1]
+
+      repeat {
+          if (cmdName == lbCALIB) {
+              params <- as.numeric(cmdPars[-1])
+              if (length(params)==3) {
+                 PPMRANGE <- c( min(params[1:2]), max(params[1:2]) )
+                 PPMREF <- params[3]
+                 Write.LOG(paste0("Rnmr1D:  Calibration: PPM REF =",PPMREF,", Zone Ref = (",PPMRANGE[1],",",PPMRANGE[2],")\n"), logfile=LOGFILE);
+                 specMat <- RCalib1D(specMat, PPMRANGE, PPMREF)
+                 specMat$fWriteSpec <- TRUE
+                 CMD <- CMD[-1]
+              }
+              break
+          }
+          if (cmdName == lbBASELINE) {
+              params <- as.numeric(cmdPars[-1])
+              if (length(params)==6) {
+                 PPM_NOISE <- c( min(params[1:2]), max(params[1:2]) )
+                 PPMRANGE <- c( min(params[3:4]), max(params[3:4]) )
+                 BCTYPE <- params[5]
+                 WSFAC <- params[6]
+                 WINDOWSIZE <- round(WSFAC*SI/(BCTYPE*64))
+                 Write.LOG(paste0("Rnmr1D:  Baseline Correction: PPM Range = ( ",min(PPMRANGE)," , ",max(PPMRANGE)," )\n"), logfile=LOGFILE);
+                 Write.LOG(paste0("Rnmr1D:  Window Size = ",WINDOWSIZE,"\n"), logfile=LOGFILE);
+                 registerDoParallel(cores=NCPU)
+                 specMat <- RBaseline1D(specMat,PPM_NOISE, PPMRANGE, WINDOWSIZE)
+                 specMat$fWriteSpec <- TRUE
+                 CMD <- CMD[-1]
+              }
+              break
+          }
+          if (cmdName == lbALIGN) {
+              CMD <- CMD[-1]
+              zones1 <- NULL
+              while(CMD[1] != EOL) {
+                  zones1 <- rbind(zones1, as.numeric(unlist(strsplit(CMD[1],";"))))
+                  CMD <- CMD[-1]
+              }
+              Write.LOG("Rnmr1D:  Alignment of the selected zones ...\n", logfile=LOGFILE)
+              specMat <- RAlign1D(specMat, zones1, LOGFILE=LOGFILE)
+              specMat$fWriteSpec <- TRUE
+              CMD <- CMD[-1]
+              break
+          }
+          if (cmdName == lbZERO) {
+              CMD <- CMD[-1]
+              zones2 <- NULL
+              while(CMD[1] != EOL) {
+                  zones2 <- rbind(zones2, as.numeric(unlist(strsplit(CMD[1],";"))))
+                  CMD <- CMD[-1]
+              }
+              Write.LOG("Rnmr1D:  Zeroing the selected PPM ranges ...\n", logfile=LOGFILE)
+              specMat <- RZero1D(specMat, zones2, LOGFILE=LOGFILE)
+              specMat$fWriteSpec <- TRUE
+              CMD <- CMD[-1]
+              break
+          }
+          break
+      }
+   }
+   return(specMat)
+}
+#----
+# Generates the buckets table
+#----
+get_Buckets_table <- function(bucketfile)
+{
+   outtable <- NULL
+   if ( file.exists(bucketfile) ) {
+      # Read the buckets
+      buckets <- read.table(bucketfile, header=T, sep="\t",stringsAsFactors=FALSE)
+      colnames(buckets) <- c("center", "width")
+      buckets$name <- gsub("^(\\d+)","B\\1", gsub("\\.", "_", gsub(" ", "", sprintf("%7.4f",buckets[,1]))) )
+      buckets$min <- buckets[,1]-0.5*buckets[,2]
+      buckets$max <- buckets[,1]+0.5*buckets[,2]
+     
+      outtable <- buckets[, c("name", "center", "min", "max", "width") ]
+   }
+   return(outtable)
+}
+
+#----
+# Generates the buckets data set
+#----
+get_Buckets_dataset <- function(DATADIR, specMat, buckets, norm_meth='CSN')
+{
+   # get index of buckets' ranges
+   buckets_m <- t(simplify2array(lapply( c( 1:(dim(buckets)[1]) ), 
+                  function(x) { c( length(which(specMat$ppm>buckets[x,2])), length(which(specMat$ppm>buckets[x,1])) ) }
+                 )))
+
+   # Integration
+   buckets_IntVal <- C_all_buckets_integrate (specMat$int, buckets_m, 1)
+   buckets_IntVal_CSN <- C_buckets_CSN_normalize( buckets_IntVal )
+   if (norm_meth == 'CSN') {
+       buckets_IntVal <- buckets_IntVal_CSN
+   }
+   if (norm_meth == 'PQN') {
+       VrefMed <- C_MedianSpec(specMat$int)
+       bucVref_int <- C_buckets_integrate (VrefMed, buckets_m, 1)
+       bucVref_int_CSN <- 100*bucVref_int/sum(bucVref_int)
+       bucRatio <- buckets_IntVal_CSN / bucVref_int_CSN
+       Coeff <- apply(bucRatio,1,median)
+       buckets_IntVal <- buckets_IntVal_CSN / Coeff
+   }
+
+   # read samples
+   samplesFile <- file.path(DATADIR,'samples.csv')
+   samples <- read.table(samplesFile, header=F, sep=";", stringsAsFactors=FALSE)
+   # read factors
+   factorsFile <- file.path(DATADIR,"factors")
+   factors <- read.table(factorsFile, header=F, sep=";", stringsAsFactors=FALSE)
+
+   # write the data table
+   buclist <- 0.5*(buckets[,1]+buckets[,2])
+   bucnames <- gsub("^(\\d+)","B\\1", gsub("\\.", "_", gsub(" ", "", sprintf("%7.4f",buclist))) )
+   outdata <- cbind( samples[, -1], buckets_IntVal )
+   colnames(outdata) <- c( factors[,2], bucnames )
+   return(outdata)
+}
+
+
+########################################################################################################################
+#
+#                    Main
+#
+########################################################################################################################
+
+# -------- Get & Check Inputs --------
+
+# the full path name of the ZIP file (raw.zip)
+if ( is.null(opts$zip)) stop("the full path name of the ZIP file (-z option) must be specified\n", call.=FALSE)
+if ( ! file.exists(opts$zip)) stop("File ", opts$zip, " does not exist\n", call.=FALSE)
+RawZip <- opts$zip
+
+# the full path name of the Sample file
+if ( is.null(opts$samples)) stop("the full path name of the Sample file (-s option) must be specified\n", call.=FALSE)
+if ( ! file.exists(opts$samples)) stop("File ", opts$samples, " does not exist\n", call.=FALSE)
+SampleFile <- opts$samples
+
+# directory to output the resulting files
+if ( is.null(opts$outdir)) stop("the directory to output the resulting files (-o option) must be specified\n")
+if ( ! file.exists(opts$outdir)) stop("Directory ", opts$outdir, " does not exist\n", call.=FALSE)
+DATADIR <- opts$outdir
+
+# the Macro-commands file for processing (optional)
+PCMDFile <- NULL
+if ( ! is.null(opts$proccmd) && file.exists(opts$proccmd) ) PCMDFile <- opts$proccmd
+
+# the full path name of the file of bucket's zones (optional)
+BUCFile <- NULL
+if ( ! is.null(opts$bucfile) && file.exists(opts$bucfile) ) BUCFile <- opts$bucfile
+
+# the Supevisor Log file (optional)
+LOGFILE <- stdout()
+if ( ! is.null(opts$logfile) && opts$logfile != "stdout" ) {
+    Write.LOG(paste0("Rnmr1D:  logfile=",opts$logfile," \n"), logfile=LOGFILE)
+    LOGFILE <- opts$logfile
+}
+
+# the number of cores (optional)
+CORES <- 4
+if ( !is.null(opts$cpu) ) CORES <- opts$cpu
+
+# -------- Init. Output files --------
+
+# The full path of the output filenames
+specs.pack   <- 'specs.pack'
+specPackFile <- file.path(DATADIR,specs.pack)
+CMD.filename <- file.path(DATADIR,'SpecProcCmd.lst')
+BUC.filename <- file.path(DATADIR,'SpecBucCmd.lst')
+BUCKET_LIST  <- file.path(DATADIR,'bucket_list.in')
+DATA_MATRIX  <- file.path(DATADIR,'data_matrix.txt')
+BUCKET_FILE <- file.path(DATADIR,'bucket_out.txt')
+
+# -------- Init. Parameters & Environment --------
+
+# Create a temporary directory 'tmp' under 'outDir':
+tmpDir <- file.path(DATADIR,'tmp')
+if ( ! file.exists(tmpDir) ) dir.create(tmpDir)
+system( paste("chmod 777 ",tmpDir) )
+
+# unzip
+unzip(RawZip, files = NULL, list = FALSE, overwrite = TRUE,  junkpaths = FALSE, exdir = tmpDir, unzip = "internal",   setTimes = FALSE)
+
+# Generate the 'samples.csv' & 'factors' files from the list of raw spectra
+if ( generate_Metadata_File(tmpDir, DATADIR, SampleFile)==0 ) {
+    stop(paste0("Something failed when attempting to generate the metadata files. See ",file.path(DATADIR,'errorlist.csv'),"\n"), call.=FALSE)
+}
+
+# Initialize the list of processing parameters
+procParams <- Spec1r.Procpar
+procParams$VENDOR <- "bruker"
+procParams$INPUT_SIGNAL <- "1r"
+procParams$READ_RAW_ONLY <- TRUE
+
+Write.LOG("Rnmr1D:  --- READING and CONVERTING ---\n", logfile=LOGFILE)
+
+# Get the list of all Raw directories
+LIST <- read.table(file.path(DATADIR,'rawids.csv'), sep=';', stringsAsFactors=F)
+
+# Get the list of samples
+samples <- read.table(file.path(DATADIR,"samples.csv"), header=F, sep=";", stringsAsFactors=FALSE)
+
+registerDoParallel(cores=CORES)
+
+# -------- Core of the script --------
+
+n <- 0
+ptime <- system.time({
+
+    specList <- foreach(x=1:(dim(LIST)[1]), .combine=cbind) %dopar% {
+         ACQDIR <- file.path(LIST[x,1],LIST[x,2])
+         # Init the log filename
+         procParams$LOGFILE <- paste0(tmpDir,'/',basename(dirname(ACQDIR)),'.log')
+         procParams$PDATA_DIR <- file.path('pdata',LIST[x,3])
+         if (file.exists(procParams$LOGFILE)) unlink(procParams$LOGFILE)
+         spec <- Spec1r.doProc(Input=ACQDIR,proc=procParams)
+
+         # Add to the Supevisor Log file
+         Write.LOG( paste0("[",x,"/",dim(LIST)[1],"]: ", basename(dirname(ACQDIR)),"\n-----\n"), logfile=LOGFILE)
+         if (file.exists(procParams$LOGFILE)) {
+            infoLines <- readLines(procParams$LOGFILE)
+            Write.LOG( paste0( paste(as.list(infoLines), collapse="\n"),"\n\n" ), logfile=LOGFILE)
+         }
+         n <- n + 1
+
+         spec
+    }
+
+    Write.LOG("Rnmr1D:  Generate the final matrix of spectra...\n", logfile=LOGFILE)
+
+    M <- NULL
+    ST <- 0
+    N <- dim(specList)[2]
+    vpmin<-0; vpmax<-0
+    n <- 0
+
+    for(i in 1:N) {
+        spec <- specList[,i]
+        P <- spec$ppm>PPM_MIN & spec$ppm<=PPM_MAX
+        S <- sum(as.numeric(spec$int[P]))
+        V <- spec$int[P]/S
+        vppm <- spec$ppm[P]
+        if (PPM_MIN<specList[,i]$pmin) {
+            nbzeros <- round((specList[,i]$pmin - PPM_MIN)/specList[,i]$dppm)
+            vpmin <- vpmin + specList[,i]$pmin - nbzeros*specList[,i]$dppm
+            V <- c( rep(0,nbzeros), V )
+        } else {
+            vpmin <- vpmin + vppm[1]
+        }
+        if (PPM_MAX>specList[,i]$pmax) {
+            nbzeros <- round((PPM_MAX - specList[,i]$pmax)/specList[,i]$dppm)
+            vpmax <- vpmax + specList[,i]$pmax + nbzeros*specList[,i]$dppm
+            V <- c( V, rep(0,nbzeros) )
+        } else {
+            vpmax <- vpmax + vppm[length(vppm)]
+        }
+        M <- rbind(M, rev(V))
+        ST <- ST + S
+
+        n <- n + 1
+    }
+    M <- M*(ST/N)
+
+    cur_dir <- getwd()
+    setwd(DATADIR)
+
+    speclstname <- basename(dirname(sapply(c(1:N), function(x) {specList[,x]$path})))
+    write.table(speclstname, file='list_1r.txt', sep="", row.names=F, col.names=F, quote=F)
+
+    Write.LOG("Rnmr1D:  Write the spec.pack file ...\n", logfile=LOGFILE)
+
+    if (file.exists(specs.pack)) unlink(specs.pack)
+    writeSpecMatrix(M, (vpmin/N), (vpmax/N), specs.pack)
+
+    Write.LOG("Rnmr1D:  Write the list_pars.csv file ...\n", logfile=LOGFILE)
+
+    # Raw IDs : expno & procno 
+    IDS <- cbind(basename(as.vector(LIST[,1])), LIST[, c(2:3)])
+
+    PARS <- t(sapply(c(1:N), function(x) { c( basename(dirname(specList[,x]$path)),
+                                   samples[IDS[x,1] == samples[,1], 2],
+                                   IDS[which(IDS[x,1]==basename(dirname(specList[,x]$path))), c(2:3)],
+                                   specList[,x]$proc$PULSE, specList[,x]$proc$SOLVENT, specList[,x]$proc$GRPDLY, specList[,x]$proc$phc0, specList[,x]$proc$phc1,
+                                   specList[,x]$proc$SFO1, specList[,x]$proc$TD, specList[,x]$proc$SW, specList[,x]$proc$SWH, 
+                                   specList[,x]$pmax, min(specList[,x]$int), max(specList[,x]$int)
+                                  )
+                               }))
+    colnames(PARS) <- c("Spectrum", "Samplecode", "EXPNO", "PROCNO", "PULSE", "SOLVENT", "GRPDLY", "PHC0","PHC1","SF","SI","SW", "SW_p","OFFSET","Ymin","Ymax" )
+    write.table(PARS, file='list_pars.csv', sep=";", row.names=F, col.names=T, quote=F)
+
+    setwd(cur_dir)
+
+  # Rnmr1D macrocommand file
+    if ( ! is.null(PCMDFile)) {
+        file.copy(PCMDFile, CMD.filename, overwrite = TRUE)
+
+        Write.LOG("Rnmr1D: ------------------------------------\n", logfile=LOGFILE)
+        Write.LOG("Rnmr1D: Process the Macro-commands file\n", logfile=LOGFILE)
+        Write.LOG("Rnmr1D: ------------------------------------\n", logfile=LOGFILE)
+        Write.LOG("Rnmr1D: \n", logfile=LOGFILE)
+
+      # Read the specs.pack -> specMat
+        specMat <- get_specMat(specPackFile)
+
+      # specParams
+        specParamFile <- file.path(DATADIR,"list_pars.csv")
+        specParamsDF <- read.table(specParamFile, header=T, sep=";", stringsAsFactors=FALSE)
+
+      # Read the macrocommand file
+        CMDTEXT <- gsub("\t", "", readLines(CMD.filename))
+
+        specMat <- RProcCMD1D(specMat, specParamsDF, CMDTEXT, NCPU=CORES, LOGFILE=LOGFILE)
+
+        # Write the new spectra matrix if needed
+        if (specMat$fWriteSpec) {
+           Write.LOG("Rnmr1D:  Write the spec.pack file ...\n", logfile=LOGFILE)
+           writeSpecMatrix(specMat$int, specMat$ppm_min, specMat$ppm_max, specPackFile)
+        }
+
+    }
+    Write.LOG("Rnmr1D: \n", logfile=LOGFILE)
+
+  # Rnmr1D buckets file
+    if ( ! is.null(BUCFile) && file.exists(specPackFile)) {
+        file.copy(BUCFile, BUC.filename, overwrite = TRUE)
+
+        Write.LOG("Rnmr1D: ------------------------------------\n", logfile=LOGFILE)
+        Write.LOG("Rnmr1D: Process the file of buckets\n", logfile=LOGFILE)
+        Write.LOG("Rnmr1D: ------------------------------------\n", logfile=LOGFILE)
+        Write.LOG("Rnmr1D: \n", logfile=LOGFILE)
+
+        # Read the specs.pack -> specMat
+        specMat <- get_specMat(specPackFile)
+
+        # The bucket zones file
+        buckets_infile <- read.table(BUC.filename, header=T, sep=sep,stringsAsFactors=FALSE)
+ 
+        if ( sum(c('min','max') %in% colnames(buckets_infile)) == 2 ) {
+             buckets <- cbind( buckets_infile$min, buckets_infile$max )
+             colnames(buckets) <- c('min','max')
+
+             Write.LOG(paste0("Rnmr1D: NB Buckets = ",dim(buckets)[1],"\n"), logfile=LOGFILE)
+             Write.LOG("Rnmr1D: \n", logfile=LOGFILE)
+
+             buclist <- cbind( 0.5*(buckets[,1]+buckets[,2]), buckets[,2]-buckets[,1] )
+             write.table(buclist, file=BUCKET_LIST, append=F, sep=sep, row.names=F, col.names=F, quote=F)
+
+             # The Data matrix
+             write.table(get_Buckets_dataset(DATADIR, specMat, buckets, norm_meth='CSN'), file=DATA_MATRIX, sep=sep, row.names=FALSE, col.names=TRUE)
+
+             # The bucket ouput file
+             bucket_names <- gsub("^(\\d+)","B\\1", gsub("\\.", "_", gsub(" ", "", sprintf("%7.4f",buclist[,1]))) )
+             outtable <- cbind( bucket_names, buclist[,1], buckets[,1], buckets[,2], buclist[,2] )
+             colnames(outtable) <-c("name", "center", "min", "max", "width")
+             write.table(outtable, file=BUCKET_FILE, sep=sep, row.names=FALSE, col.names=TRUE)
+
+        } else {
+             stop("the file of bucket's areas does not contain the 2 mandatory columns having 'min' and 'max' in its header line\n", call.=FALSE)
+        }
+
+    }
+    Write.LOG("Rnmr1D: \n", logfile=LOGFILE)
+
+})
+
+ptime
